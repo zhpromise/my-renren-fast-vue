@@ -1,7 +1,14 @@
 <template>
   <div>
+    <span>
+      <el-switch active-text="启用拖拽" inactive-text="禁用拖拽"
+                 v-model="draggable" active-color="#13ce66" inactive-color="#ff4949"></el-switch>
+        <el-button v-if="draggable" type="primary" size="mini" @click="updateSortNode">保存排序</el-button>
+        <el-button type="primary" size="mini" @click="batchDeleteNode">批量删除</el-button>
+    </span>
     <el-tree :data="treeData" :props="defaultProps" show-checkbox node-key="catId" :expand-on-click-node="false"
-             :draggable="true" :allow-drop="allowDrop" @node-drop="nodeDrop" :default-expanded-keys="expanded_keys">
+             :draggable="draggable" :allow-drop="allowDrop" @node-drop="nodeDrop" ref="categoryTree"
+             :default-expanded-keys="expanded_keys">
       <span class="custom-tree-node" slot-scope="{ node, data }">
         <span>{{ node.label }}</span>
         <span>
@@ -47,6 +54,9 @@ export default {
   components: {},
   data () {
     return {
+      draggable: false, // 是否开启拖拽功能
+      updateSortNodeArray: [], // 待更新排序节点
+      update_sort_expend_pCid: 0,
       treeData: [],
       maxLevel: 0, // 拖拽时计算最大层级
       dialogVisible: false, // dialog是否显示
@@ -67,36 +77,13 @@ export default {
     }
   },
   methods: {
-    // 成功拖动之后触发的事件
-    nodeDrop (draggingNode, dropNode, dropType) {
-      console.log('tree drop: ', draggingNode, dropNode, dropType)
-      let parentNode = dropType === 'inner' ? dropNode : dropNode.parent
-      console.log('parentNode==>', parentNode)
-      let updateNode = []
-      parentNode.childNodes.forEach((node, index) => {
-        // 1.更改层级
-        //  2.更改排序
-        if (node.data.catId === draggingNode.data.catId) {
-          updateNode.push({
-            catId: node.data.catId,
-            catLevel: parentNode.level + 1,
-            sort: index,
-            parentCid: parentNode.data.catId === undefined ? 0 : parentNode.data.catId
-          })
-          //  更改拖动节点子项的层级
-          this.queryNodeLevel(node, updateNode)
-        } else {
-          updateNode.push({
-            catId: node.data.catId,
-            sort: index
-          })
-        }
-      })
-      console.log('需要更新的数据==>', updateNode)
+
+    // 更新排序
+    updateSortNode () {
       this.$http({
         url: this.$http.adornUrl('/product/category/update/sort'),
         method: 'post',
-        data: this.$http.adornData(updateNode, false)
+        data: this.$http.adornData(this.updateSortNodeArray, false)
       }).then(({ data }) => {
         console.log('更新层级排序==>', data)
         if (data.code === 0) {
@@ -104,8 +91,9 @@ export default {
             type: 'success',
             message: '拖拽成功'
           })
-          this.getCategoryTree()
-          this.expanded_keys = [parentNode.data.catId]
+          this.loadTree()
+          this.expanded_keys = [this.update_sort_expend_pCid]
+          this.updateSortNodeArray = []
         } else {
           this.$message({
             type: 'error',
@@ -114,12 +102,75 @@ export default {
         }
       })
     },
+    // 批量删除
+    batchDeleteNode () {
+      let selectData = this.$refs.categoryTree.getCheckedNodes()
+      let deleteCatId = []
+      let deleteName = []
+      selectData.forEach(node => {
+        deleteCatId.push(node.catId)
+        deleteName.push(node.name)
+      })
+
+      this.$confirm(`确认是否删除[${deleteName.toLocaleString()}]分类?`, '提示', {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }).then(() => {
+        this.$http({
+          url: this.$http.adornUrl('/product/category/delete'),
+          method: 'post',
+          data: this.$http.adornData(deleteCatId, false)
+        }).then(({ data }) => {
+          if (data.code === 0) {
+            this.$message({
+              type: 'success',
+              message: '删除成功'
+            })
+            this.loadTree()
+          } else {
+            this.$message({
+              type: 'error',
+              message: data.msg
+            })
+          }
+        })
+      }).catch(() => {})
+    },
+
+    // 成功拖动之后触发的事件
+    nodeDrop (draggingNode, dropNode, dropType) {
+      console.log('tree drop: ', draggingNode, dropNode, dropType)
+      let parentNode = dropType === 'inner' ? dropNode : dropNode.parent
+      console.log('parentNode==>', parentNode)
+      parentNode.childNodes.forEach((node, index) => {
+        // 1.更改层级
+        //  2.更改排序
+        if (node.data.catId === draggingNode.data.catId) {
+          this.updateSortNodeArray.push({
+            catId: node.data.catId,
+            catLevel: parentNode.level + 1,
+            sort: index,
+            parentCid: parentNode.data.catId === undefined ? 0 : parentNode.data.catId
+          })
+          //  更改拖动节点子项的层级
+          this.queryNodeLevel(node)
+        } else {
+          this.updateSortNodeArray.push({
+            catId: node.data.catId,
+            sort: index
+          })
+        }
+      })
+      this.update_sort_expend_pCid = parentNode.data.catId
+      console.log('需要更新的数据==>', this.updateSortNodeArray)
+    },
 
     // 递归收集需要更新的子节点层级
-    queryNodeLevel (node, updateNode) {
+    queryNodeLevel (node) {
       if (node.childNodes != null && node.childNodes.length > 0) {
         node.childNodes.forEach(node => {
-          updateNode.push({
+          this.updateSortNodeArray.push({
             catId: node.data.catId,
             catLevel: node.level
           })
@@ -252,7 +303,7 @@ export default {
     // 关闭窗口时恢复默认数据
     closeDialog () {
       // 重载树数据
-      this.getCategoryTree()
+      this.loadTree()
       this.dialogVisible = false // dialog是否显示
       this.title = '' // 弹窗标题
       this.actionType = 'add' // add 添加分类； edit 编辑分类
@@ -299,7 +350,7 @@ export default {
 
       })
     },
-    getCategoryTree () {
+    loadTree () {
       this.$http({
         url: this.$http.adornUrl('/product/category/list/tree'),
         method: 'get'
@@ -315,7 +366,7 @@ export default {
   watch: {},
   // 生命周期-创建完成（可以访问当前this实例）
   created () {
-    this.getCategoryTree()
+    this.loadTree()
   },
   // 生命周期-挂载完成（可以访问DOM元素）
   mounted () {
